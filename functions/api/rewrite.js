@@ -47,6 +47,16 @@ const SYSTEMS = {
 };
 const MAX_TOKENS = { rewrite: 700, summary: 1200, review: 1500, skills: 700 };
 const MAX_BODY = 24000;
+const PER_IP_PER_MIN = 12;
+const hits = new Map();          // best-effort only: Workers isolates are not shared
+function rateLimited(ip){
+  const now = Date.now();
+  const list = (hits.get(ip) || []).filter(t => now - t < 60000);
+  list.push(now); hits.set(ip, list);
+  if (hits.size > 5000) hits.clear();
+  return list.length > PER_IP_PER_MIN;
+}
+const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
 const cors = env => ({
   'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN || '*',
@@ -71,9 +81,13 @@ export async function onRequestPost({ request, env }) {
   let body;
   try { body = await request.json(); } catch { return json({ error: 'Bad JSON body' }, 400, env); }
 
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+  if (rateLimited(ip)) return json({ error: 'Too many requests — wait a minute.' }, 429, env);
+
   const task = String(body?.task || '');
   const prompt = String(body?.prompt || '');
-  if (!SYSTEMS[task]) return json({ error: 'Unknown task' }, 400, env);
+  // hasOwnProperty, not truthiness: SYSTEMS['constructor'] is otherwise truthy
+  if (!own(SYSTEMS, task)) return json({ error: 'Unknown task' }, 400, env);
   if (!prompt.trim()) return json({ error: 'Empty prompt' }, 400, env);
   if (prompt.length > MAX_BODY) return json({ error: 'Prompt too large' }, 413, env);
 

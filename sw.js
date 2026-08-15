@@ -1,7 +1,7 @@
 /* Resume Builder service worker.
    App shell is cached so the app opens with no connection at all. Bump CACHE
    when you deploy: the old cache is deleted on activate and clients reload. */
-const CACHE = 'resume-builder-v3';
+const CACHE = 'resume-builder-v4';
 const SHELL = [
   './',
   './index.html',
@@ -55,6 +55,8 @@ self.addEventListener('fetch', e => {
         caches.open(CACHE).then(c => c.put(req, copy));
       }
       return res;
-    }).catch(() => hit))
+      // `hit` is falsy in this branch, so returning it made respondWith throw;
+      // hand back a real response instead
+    }).catch(() => new Response('', {status: 504, statusText: 'Offline'})))
   );
 });

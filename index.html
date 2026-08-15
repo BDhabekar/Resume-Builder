@@ -1000,6 +1000,15 @@ const plainList = a => clean(a).map(plain);
 const arr = v => (Array.isArray(v) ? v.filter(x => x && typeof x === 'object') : []);
 const clampNum = (v,lo,hi,dflt) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt; };
 const isHex = v => /^#[0-9a-f]{3}(?:[0-9a-f]{3}(?:[0-9a-f]{2})?)?$/i.test(String(v));
+/* Contact links become <a href> in the preview and external relationships in the
+   .docx, so anything but a real navigable scheme is dropped. */
+function safeUrl(v){
+  const u = str(v).trim();
+  if(!u) return '';
+  if(/^(https?:|mailto:|tel:)/i.test(u)) return u;
+  if(/^[a-z][a-z0-9+.-]*:/i.test(u)) return '';        // javascript:, data:, file: …
+  return 'https://' + u.replace(/^\/+/,'');            // bare "example.com/x"
+}
 const SECTION_TYPES = new Set(['text','skills','experience','education','list']);
 
 function normalizeState(d){
@@ -1028,14 +1037,14 @@ function normalizeState(d){
       const raw = str(c.text);
       const md = raw.match(MD_LINK_ONLY);       // a whole field that became one link
       return {
-        id: str(c.id) || uid(),
+        id: safeId(c.id),
         icon: Object.prototype.hasOwnProperty.call(ICONS, c.icon) ? c.icon : 'none',
         text: plain(raw),
         // the link field gets markdown-mangled just as often as the text one
         link: (()=>{
           const rawLink = str(c.link);
           const lmd = rawLink.match(MD_LINK_ONLY);
-          return (lmd ? lmd[2] : plain(rawLink)) || (md ? md[2] : '');
+          return safeUrl((lmd ? lmd[2] : plain(rawLink)) || (md ? md[2] : ''));
         })(),
         underline: !!c.underline
       };
@@ -1046,23 +1055,23 @@ function normalizeState(d){
     .filter(s => s && typeof s === 'object')
     .map(sec => {
       const t = SECTION_TYPES.has(sec.type) ? sec.type : 'text';
-      const o = { id: str(sec.id) || uid(), type: t, heading: plain(sec.heading),
+      const o = { id: safeId(sec.id), type: t, heading: plain(sec.heading),
                   visible: sec.visible !== false, timeline: !!sec.timeline };
       if(t === 'text')  o.text = plain(sec.text);
       if(t === 'list')  o.bullets = plainList(sec.bullets);
       if(t === 'skills') o.items = arr(sec.items).map(it => ({
-        id: str(it.id) || uid(), category: plain(it.category),
+        id: safeId(it.id), category: plain(it.category),
         skills: plainList(it.skills != null ? it.skills : splitSkills(it.list))
       }));
       if(t === 'experience') o.items = arr(sec.items).map(it => ({
-        id: str(it.id) || uid(), org: plain(it.org), meta: plain(it.meta), desc: plain(it.desc),
+        id: safeId(it.id), org: plain(it.org), meta: plain(it.meta), desc: plain(it.desc),
         bulletsLabel: it.bulletsLabel === undefined ? 'Key Contributions:' : plain(it.bulletsLabel),
         bullets: plainList(it.bullets),
         impactsLabel: it.impactsLabel === undefined ? 'Impact:' : plain(it.impactsLabel),
         impacts: plainList(it.impacts)
       }));
       if(t === 'education') o.items = arr(sec.items).map(it => ({
-        id: str(it.id) || uid(), title: plain(it.title), details: plainList(it.details)
+        id: safeId(it.id), title: plain(it.title), details: plainList(it.details)
       }));
       return o;
     });
@@ -1083,7 +1092,10 @@ function edesign(){
 }
 
 /* helpers */
-const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* ids reach HTML attributes and localStorage, so keep them to a safe charset */
+const safeId = v => (str(v).replace(/[^A-Za-z0-9_-]/g,'').slice(0,40)) || uid();
 /* Trim + drop blanks. Applied at render and export so half-typed entries never
    leak stray whitespace into the resume, without ever writing back to state
    mid-edit (which would fight the editor's re-render). */
@@ -1233,6 +1245,7 @@ function renderPreview(){
    PREVIEW LAYOUT — zoom to fit, and show where the A4 pages will break
    ========================================================================== */
 const MM = v => v * 96 / 25.4;          // mm -> css px
+let lastPageCount = 1;                 // set by layoutPreview, read by atsCheck
 
 /* Mirror the printed pagination: walk the blocks that carry break-inside:avoid
    in document order and start a new page whenever one would straddle the edge. */
@@ -1261,9 +1274,11 @@ function pageBreaks(){
     const r = box(atoms[i]);
     if(r.bottom - pageStart <= pageH) continue;        // still fits on this page
 
-    if(r.h > pageH){                                   // single block taller than a page
-      pageStart += pageH;
-      breaks.push({y:pageStart, el:null, from:pageStart - pageH});
+    if(r.h > pageH){        // taller than a page: it spans several, not just one
+      while(r.bottom - pageStart > pageH){
+        pageStart += pageH;
+        breaks.push({y:pageStart, el:null, from:pageStart - pageH});
+      }
       continue;
     }
 
@@ -1326,10 +1341,14 @@ function layoutPreview(){
     anchor.parentNode.insertBefore(d, anchor);
   });
   const pages = breaks.length + 1;
+  lastPageCount = pages;
   paper.style.setProperty('--sheeth',
     (pages * (pageH + 2*mg) + (pages-1) * GAP) + 'px');
   const note = $('#pageNote');
-  if(note) note.innerHTML = `A4 · ${breaks.length + 1} page${breaks.length ? 's' : ''} · ` +
+  // a block taller than one page is split by the browser's own line breaking,
+  // which we cannot model exactly — say "about" rather than claim precision
+  const approx = breaks.some(b => !b.el);
+  if(note) note.innerHTML = `A4 · ${approx ? 'about ' : ''}${breaks.length + 1} page${breaks.length ? 's' : ''} · ` +
     `<b>Download PDF</b> → “Save as PDF”, leave Margins on <b>Default</b>.`;
 
   // 2. zoom
@@ -1489,7 +1508,7 @@ function renderSectionEditor(sec, si){
   }
 
   return `
-  <div class="card ${openCards.has(sec.id)?'open':''} ${sec.visible===false?'hidden-sec':''}" data-card="${sec.id}">
+  <div class="card ${openCards.has(sec.id)?'open':''} ${sec.visible===false?'hidden-sec':''}" data-card="${esc(sec.id)}">
     <div class="card-head">
       <span class="chev">▶</span>
       <span class="card-title">${esc(sec.heading||'Untitled')}<span class="type-tag">${TYPE_LABEL[sec.type]||sec.type}</span></span>
@@ -1574,6 +1593,14 @@ function setByPath(path, value){
   o[/^\d+$/.test(leaf) ? Number(leaf) : leaf] = MULTILINE.has(leaf) ? lines(value) : value;
 }
 /* Ensure an array exists at a path, then return it. */
+/* findings[] and skill suggestions cache paths; a structural edit afterwards can
+   make them address a different section entirely. Check before writing. */
+function pathAlive(path, expect){
+  try{
+    const v = getByPath(path);
+    return expect === undefined ? v !== undefined : typeof v === typeof expect;
+  }catch(_){ return false; }
+}
 function arrAt(path){
   const parts = path.split('.');
   const leaf = parts.pop();
@@ -1863,9 +1890,7 @@ $('#fileInput').addEventListener('change', e=>{
     try{
       const d = JSON.parse(r.result);
       if(!d.header || !Array.isArray(d.sections)) throw new Error('Not a resume file');
-      state = normalizeState(d);
-      openCards.clear();
-      renderEditor(); renderPreview();
+      adoptState(d);
       toast('Loaded '+f.name);
     }catch(err){ alert('Could not read that file: '+err.message); }
     e.target.value='';
@@ -1874,14 +1899,14 @@ $('#fileInput').addEventListener('change', e=>{
 });
 $('#btnSample').addEventListener('click', ()=>{
   if(!confirm('Replace everything with the original sample resume?')) return;
-  state = normalizeState(sampleData()); openCards.clear(); renderEditor(); renderPreview(); toast('Sample restored');
+  adoptState(sampleData()); toast('Sample restored');
 });
 $('#btnBlank').addEventListener('click', ()=>{
   if(!confirm('Clear the resume and start from a blank template?')) return;
-  state = normalizeState(blankData()); openCards.clear(); renderEditor(); renderPreview(); toast('Blank template loaded');
+  adoptState(blankData()); toast('Blank template loaded');
 });
 $('#btnResetDesign').addEventListener('click', ()=>{
-  state.design = sampleData().design; syncDesignControls(); renderPreview(); toast('Design reset');
+  state.design = sampleData().design; syncDesignControls(); renderPreview(); scheduleSave(); toast('Design reset');
 });
 
 // resizable editor
@@ -2256,18 +2281,32 @@ function savedNote(msg){
 function currentDoc(){ return docs.find(d => d.id === currentId) || null; }
 
 let saveTimer = null;
-function scheduleSave(){
+/* Write the current document now. The pending timer captured a specific doc, so
+   anything that swaps `state` must flush first or the timer writes the NEW
+   state into the OLD document and destroys it. */
+function flushSave(){
+  clearTimeout(saveTimer); saveTimer = null;
   const d = currentDoc();
   if(!d) return;
+  d.data = exportState();
+  d.updated = Date.now();
+  d.name = d.name || (state.header.name || 'Untitled');
+  persistDocs();
+  renderDocPicker();
+}
+function scheduleSave(){
+  if(!currentDoc()) return;
   savedNote('Saving…');
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(()=>{
-    d.data = exportState();
-    d.updated = Date.now();
-    d.name = d.name || (state.header.name || 'Untitled');
-    persistDocs();
-    renderDocPicker();
-  }, 700);
+  saveTimer = setTimeout(flushSave, 700);
+}
+/* Replace the whole resume (import, sample, blank, paste) and persist it. */
+function adoptState(next){
+  flushSave();                 // bank whatever the previous document had
+  state = normalizeState(next);
+  openCards.clear();
+  renderEditor(); renderPreview();
+  flushSave();                 // and store the new content immediately
 }
 function renderDocPicker(){
   const sel = $('#docPicker');
@@ -2278,15 +2317,17 @@ function renderDocPicker(){
 }
 function openDoc(id){
   const d = docs.find(x => x.id === id);
-  if(!d) return;
+  if(!d || d.id === currentId) return;
+  flushSave();                                     // bank the outgoing document
   currentId = id;
-  state = normalizeState(d.data || {});
+  state = normalizeState(JSON.parse(JSON.stringify(d.data || {})));  // never alias d.data
   openCards.clear();
   lsSet(LS_CUR, currentId);
   renderEditor(); renderPreview(); renderDocPicker();
   savedNote('Saved');
 }
 function newDoc(data, name){
+  flushSave();                                     // bank the outgoing document
   const d = {id: uid()+Date.now().toString(36), name: name || 'Untitled resume',
              updated: Date.now(), data: normalizeState(data || blankData())};
   docs.unshift(d);
@@ -2452,13 +2493,19 @@ function analyseResume(){
       (sec.items||[]).forEach((it,ii)=>{
         const ctx = {role: it.org||'', meta: it.meta||'', where: it.org||'this role'};
 
-        clean(it.bullets).forEach((b,ri)=>{
+        // iterate the raw array: rowEditor and setByPath both index it directly,
+        // so a cleaned index would address the wrong row whenever a blank exists
+        (it.bullets||[]).forEach((b,ri)=>{
+          if(!str(b).trim()) return;
           const base = {sid:sec.id, path:`sections.${si}.items.${ii}.bullets.${ri}`, text:b, kind:'bullet', ctx};
           allBullets.push(b);
 
           const weak = WEAK_OPENERS.find(([re]) => re.test(b));
           if(weak) F.push({...base, sev:'high', tag:'weak verb',
             msg:'Bullet opens with a weak phrase', why:weak[1]});
+          else if(!firstWord(b)) F.push({...base, sev:'low', tag:'verb',
+            msg:'Bullet does not start with a word',
+            why:'Leading with a figure reads as a fragment. Start with the action, then the number.'});
           else if(!STRONG_VERBS.has(firstWord(b))) F.push({...base, sev:'low', tag:'verb',
             msg:`Opens with “${firstWord(b)}” — consider a sharper action verb`,
             why:'Bullets read strongest when the first word is a past-tense achievement verb.'});
@@ -2482,7 +2529,8 @@ function analyseResume(){
 
         // impacts should be outcomes, not restatements
         const bl = clean(it.bullets).map(x=>x.toLowerCase());
-        clean(it.impacts).forEach((im,ri)=>{
+        (it.impacts||[]).forEach((im,ri)=>{
+          if(!str(im).trim()) return;
           const base = {sid:sec.id, path:`sections.${si}.items.${ii}.impacts.${ri}`, text:im, kind:'impact', ctx};
           const toks = new Set(im.toLowerCase().split(/\W+/).filter(w=>w.length>3));
           const dup = bl.find(b=>{
@@ -2581,7 +2629,8 @@ function atsCheck(){
                   : kind === 'experience' ? visible.some(s=>s.type==='experience')
                   : visible.some(s=>s.type==='education');
     if(present && !has){
-      const label = headings.find(x=>x) || kind;
+      const own = visible.find(s => s.type === (kind === 'summary' ? 'text' : kind));
+      const label = str(own && own.heading).trim() || kind;
       add('med', `Heading for your ${kind} section may not be recognised`,
           `Screeners match on a fixed list of headings. “${label}” is safer as a standard one such as “${
             kind==='summary'?'Professional Summary':kind==='skills'?'Technical Skills':
@@ -2618,7 +2667,7 @@ function atsCheck(){
   if(!state.design.ats) add('low','ATS-safe mode is off',
     'The timeline rails and dots are decorative only and carry no text, so they are harmless — but ATS-safe mode also switches to a system font, one plain column and comma-separated skills, which parses most cleanly.');
 
-  const pages = ($$('#paper .pgap').length || 0) + 1;
+  const pages = lastPageCount;   // the same number the preview reports
   if(pages > 2) add('med', `Resume runs to ${pages} pages`,
     'Two pages is the usual ceiling for an engineering CV; some screeners only index the first pages.');
 
@@ -2668,10 +2717,13 @@ function existingSkills(){
    "Kubernetes" is redundant when "Kubernetes (EKS)" is listed, as is "Git"
    against "GitHub Actions". Also drop candidates contained in a longer one. */
 function pruneSkills(cands){
+  // whole-token match: a raw substring test made "Django" swallow "Go"
+  const rx = t => new RegExp('(^|[^a-z0-9+#/.])' + t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') +
+                             '([^a-z0-9+#/.]|$)', 'i');
   const blob = [...existingSkills()].join(' | ');
   const fresh = [...new Set(cands.map(s=>String(s).trim()).filter(Boolean))]
-    .filter(c => !blob.includes(c.toLowerCase()));
-  return fresh.filter(a => !fresh.some(b => b !== a && b.toLowerCase().includes(a.toLowerCase())));
+    .filter(c => !rx(c).test(blob));
+  return fresh.filter(a => !fresh.some(b => b !== a && rx(a).test(b)));
 }
 function mineSkills(){
   const text = experienceText(), out = [];
@@ -2864,8 +2916,10 @@ async function sendToProvider(system, user, maxTokens){
 async function connectAI(){
   ai.provider = $('#aiProvider').value;
   ai.key  = $('#apiKey').value.trim();
-  ai.base = $('#aiBase').value.trim();
   const prov = AI_PROVIDERS[ai.provider] || {};
+  // only honour the base URL for providers that ask for one, otherwise a value
+  // left in the hidden field would send the key to the wrong host
+  ai.base = prov.needsBase ? $('#aiBase').value.trim() : '';
   if(!prov.kind) return aiStatus(prov.label + ' has no public API — use the copy-and-paste route above.', 'err');
   if(!ai.key)    return aiStatus('Paste an API key first.', 'err');
   if(prov.needsBase && !ai.base) return aiStatus('This provider needs a base URL, e.g. https://api.example.com/v1', 'err');
@@ -3068,12 +3122,12 @@ $('#editor').addEventListener('click', async e=>{
   if(act === 'applypaste'){
     const raw = $('#pasteBack').value;
     try{
-      const parsed = extractJSON(raw);
-      const before = JSON.stringify(state);
-      state = normalizeState(parsed);
-      if(!state.sections.length && !state.header.name) throw new Error('that JSON has no resume in it');
-      openCards.clear(); renderEditor(); renderPreview();
+      const before = JSON.stringify(exportState());
+      const candidate = normalizeState(extractJSON(raw));      // build it first…
+      if(!candidate.sections.length && !candidate.header.name)
+        throw new Error('that JSON has no resume in it');      // …reject before adopting
       lastRevert = before;
+      adoptState(candidate);
       pasteStatus('Applied. Check the numbers, then use Undo below if it is not what you wanted.', 'ok');
       $('#pasteBack').value = '';
     }catch(err){
@@ -3084,9 +3138,9 @@ $('#editor').addEventListener('click', async e=>{
 
   if(act === 'revertpaste'){
     if(!lastRevert) return;
-    state = normalizeState(JSON.parse(lastRevert));
+    const back = JSON.parse(lastRevert);
     lastRevert = null;
-    openCards.clear(); renderEditor(); renderPreview();
+    adoptState(back);
     pasteStatus('Reverted to the version before the paste.', 'ok');
     return;
   }
@@ -3117,6 +3171,10 @@ $('#editor').addEventListener('click', async e=>{
     const path = ($('#sugTarget')||{}).value;
     if(!path) return;
     const skill = suggestions[Number(b.dataset.i)];
+    if(!pathAlive(path, [])){
+      suggestions = []; renderSuggestions();
+      return toast('The resume changed — run the check again');
+    }
     arrAt(path).push(skill);
     suggestions.splice(Number(b.dataset.i),1);
     renderPreview(); renderEditor(); renderSuggestions();
@@ -3127,6 +3185,8 @@ $('#editor').addEventListener('click', async e=>{
   if(act === 'goto'){
     const f = findings[Number(b.dataset.fi)];
     if(!f || !f.path) return;
+    if(!pathAlive(f.path, '')){ analyseResume(); renderReview();
+      return toast('The resume changed — the list has been refreshed'); }
     if(f.sid) openCards.add(f.sid);
     showPane('content');
     refresh(f.path);
@@ -3147,6 +3207,8 @@ $('#editor').addEventListener('click', async e=>{
     const f = findings[Number(b.dataset.fi)];
     const text = f && f.options && f.options[Number(b.dataset.oi)];
     if(!text) return;
+    if(!pathAlive(f.path, '')){ analyseResume(); renderReview();
+      return toast('The resume changed — the list has been refreshed'); }
     setByPath(f.path, text);
     renderPreview(); renderEditor();
     analyseResume(); renderReview();
@@ -3322,10 +3384,7 @@ $('#btnInstall').addEventListener('click', async ()=>{
 });
 
 /* ---- never lose work on the way out ---- */
-window.addEventListener('beforeunload', ()=>{
-  if(saveTimer){ clearTimeout(saveTimer); const d = currentDoc();
-    if(d){ d.data = exportState(); d.updated = Date.now(); persistDocs(); } }
-});
+window.addEventListener('beforeunload', flushSave);
 
 /* The preview is display:none on phones until the Preview tab is opened, so the
    browser would never request the embedded face — and a print started from the

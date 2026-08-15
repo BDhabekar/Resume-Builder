@@ -105,7 +105,9 @@ export default async function handler(req, res) {
 
   const task = String(body.task || '');
   const prompt = String(body.prompt || '');
-  if (!SYSTEMS[task]) return res.status(400).json({ error: 'Unknown task' });
+  // hasOwnProperty, not truthiness: SYSTEMS['constructor'] is otherwise truthy
+  if (!Object.prototype.hasOwnProperty.call(SYSTEMS, task))
+    return res.status(400).json({ error: 'Unknown task' });
   if (!prompt.trim())  return res.status(400).json({ error: 'Empty prompt' });
   if (prompt.length > MAX_BODY) return res.status(413).json({ error: 'Prompt too large' });
 
@@ -141,7 +143,8 @@ export default async function handler(req, res) {
     const data = await r.json();
     if (!r.ok) {
       // never leak the upstream error verbatim — it can echo key/account details
-      console.error(PROVIDER + ' error', r.status, data?.error?.type || data?.error?.message);
+      // never log error.message — some providers echo a partial key in it
+      console.error(PROVIDER + ' error', r.status, data?.error?.type || '(no type)');
       return res.status(502).json({ error: 'Upstream model error (' + r.status + ')' });
     }
     const text =
