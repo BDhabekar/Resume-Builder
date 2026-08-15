@@ -1,7 +1,7 @@
 /* Resume Builder service worker.
    App shell is cached so the app opens with no connection at all. Bump CACHE
    when you deploy: the old cache is deleted on activate and clients reload. */
-const CACHE = 'resume-builder-v2';
+const CACHE = 'resume-builder-v3';
 const SHELL = [
   './',
   './index.html',
