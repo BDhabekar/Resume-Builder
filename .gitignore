@@ -2,6 +2,7 @@ node_modules/
 .vercel/
 .netlify/
 *.log
+*.patch
 
 # never commit a real resume
 *-resume.json
