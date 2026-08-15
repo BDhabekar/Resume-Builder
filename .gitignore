@@ -1,0 +1,8 @@
+node_modules/
+.vercel/
+.netlify/
+*.log
+
+# never commit a real resume
+*-resume.json
+resume.json

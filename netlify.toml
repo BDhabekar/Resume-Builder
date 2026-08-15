@@ -1,0 +1,15 @@
+[build]
+  publish = "."
+  command = ""
+
+# Netlify serves functions from netlify/functions; if you deploy here, move
+# api/rewrite.js to netlify/functions/rewrite.js and keep this redirect.
+[[redirects]]
+  from = "/api/rewrite"
+  to = "/.netlify/functions/rewrite"
+  status = 200
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache, max-age=0, must-revalidate"
