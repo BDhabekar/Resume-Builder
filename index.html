@@ -1031,7 +1031,12 @@ function normalizeState(d){
         id: str(c.id) || uid(),
         icon: Object.prototype.hasOwnProperty.call(ICONS, c.icon) ? c.icon : 'none',
         text: plain(raw),
-        link: str(c.link) || (md ? md[2] : ''),  // keep the URL rather than losing it
+        // the link field gets markdown-mangled just as often as the text one
+        link: (()=>{
+          const rawLink = str(c.link);
+          const lmd = rawLink.match(MD_LINK_ONLY);
+          return (lmd ? lmd[2] : plain(rawLink)) || (md ? md[2] : '');
+        })(),
         underline: !!c.underline
       };
     })
@@ -2706,6 +2711,7 @@ function subscriptionPrompt(){
     '- Do not add or remove sections, roles or list entries — only improve the text inside them.',
     '',
     'Reply with the complete updated JSON in a single ```json code block, and nothing else.',
+    'Emit raw JSON. Do not escape characters for markdown: no backslash before @ : . _ * or any other punctuation.',
     '',
     '```json',
     JSON.stringify(exportState(), null, 2),
@@ -2723,11 +2729,18 @@ function extractJSON(raw){
   const first = text.indexOf('{'), last = text.lastIndexOf('}');
   if(first !== -1 && last > first) candidates.push(text.slice(first, last+1));
   candidates.push(text);
+  /* Some assistants markdown-escape the content they emit, producing \@ \: \.
+     and friends. JSON only allows \" \\ \/ \b \f \n \r \t \uXXXX, so the
+     whole reply fails to parse. Strip stray escapes and retry — only ever as a
+     fallback, so valid JSON is never touched. */
+  const unescapeMd = t => t.replace(/\\([^"\\\/bfnrtu])/g, '$1');
   for(const c of candidates){
-    try{
-      const o = JSON.parse(c.trim());
-      if(o && typeof o === 'object' && (o.sections || o.header)) return o;
-    }catch(_){}
+    for(const attempt of [c, unescapeMd(c)]){
+      try{
+        const o = JSON.parse(attempt.trim());
+        if(o && typeof o === 'object' && (o.sections || o.header)) return o;
+      }catch(_){}
+    }
   }
   throw new Error('no resume JSON found in the reply');
 }
