@@ -148,6 +148,10 @@ label.f > span{display:block;font-size:11px;color:var(--ui-muted);margin-bottom:
 .f textarea{resize:vertical;min-height:34px;overflow:hidden}
 .f input:focus,.f textarea:focus,.f select:focus{outline:2px solid #e3d6b4;outline-offset:-1px;border-color:#c8b483}
 .hint{font-size:10.5px;color:var(--ui-muted);margin:-4px 0 8px;line-height:1.4}
+/* .hint's negative top margin is for text tucked under a form label. After a
+   row of buttons or cards it glues itself to the row above and reads as a
+   caption on the last one, so give it real space there. */
+.addbar + .hint,#templateBar + .hint{margin-top:9px}
 .row2{display:flex;gap:8px}
 .row2 > *{flex:1;min-width:0}
 .addbar{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
