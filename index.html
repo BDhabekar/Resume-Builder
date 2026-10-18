@@ -1860,6 +1860,14 @@ $$('.pane-tab').forEach(t => t.addEventListener('click', ()=>showPane(t.dataset.
 
 // toolbar
 $('#btnPrint').addEventListener('click', ()=>window.print());
+/* The browser names the saved PDF after document.title (it shows in the PDF viewer's header and as the
+   default file name). While printing, use the person's name instead of the app's title. */
+const APP_TITLE = document.title;
+window.addEventListener('beforeprint', ()=>{
+  const name = (state.header.name||'').trim();
+  document.title = name ? name + ' Resume' : 'Resume';
+});
+window.addEventListener('afterprint', ()=>{ document.title = APP_TITLE; });
 $('#btnTxt').addEventListener('click', ()=>{
   const name = baseName() + (state.design.ats ? '-resume-ats.txt' : '-resume.txt');
   download(new Blob([buildTXT()], {type:'text/plain;charset=utf-8'}), name);
